@@ -94,6 +94,108 @@ function parseExcelBuffer(buf) {
     }
 }
 
+// ---- WMS/WFS incrustados: el navegador no puede leer estos servicios por
+// CORS, así que el backend resuelve las capas y devuelve algo pintable ----
+function firstArray(x) {
+    return Array.isArray(x) ? x : (x ? [x] : []);
+}
+
+async function fetchTextTimeout(url, ms) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms || 15000);
+    try {
+        const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (VisorMurcia)' }, redirect: 'follow' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return await r.text();
+    } finally { clearTimeout(t); }
+}
+
+function capsParser() {
+    const { XMLParser } = require('fast-xml-parser');
+    return new XMLParser({ ignoreAttributes: false, removeNSPrefix: true });
+}
+
+// Lee GetCapabilities WMS y devuelve { url, layers, title, bbox, version }
+async function fetchWmsConfig(downloadUrl) {
+    const base = downloadUrl.split('?')[0];
+    const xml = await fetchTextTimeout(base + '?SERVICE=WMS&REQUEST=GetCapabilities', 15000);
+    const caps = capsParser().parse(xml);
+    const rootKey = Object.keys(caps).find(k => /capabilit/i.test(k)) || Object.keys(caps).find(k => k !== '?xml') || Object.keys(caps)[0];
+    const root = caps[rootKey];
+    if (!root) return null;
+    const version = root['@_version'] || '1.1.1';
+    const cap = root.Capability || {};
+    const topLayer = cap.Layer || {};
+    let wanted = null;
+    try {
+        const p = new URL(downloadUrl).searchParams;
+        wanted = p.get('layer') || p.get('layers') || p.get('typename') || p.get('TYPENAME');
+    } catch (e) {}
+    const layers = [];
+    const walk = (node) => {
+        if (!node || typeof node !== 'object') return;
+        if (node.Name) {
+            const name = String(node.Name);
+            const title = node.Title ? String(node.Title) : name;
+            let bbox = null;
+            const ex = node.EX_GeographicBoundingBox;
+            if (ex && ex.westBoundLongitude !== undefined) {
+                bbox = [parseFloat(ex.westBoundLongitude), parseFloat(ex.southBoundLatitude),
+                        parseFloat(ex.eastBoundLongitude), parseFloat(ex.northBoundLatitude)];
+            } else if (node.LatLonBoundingBox && node.LatLonBoundingBox['@_minx'] !== undefined) {
+                const b = node.LatLonBoundingBox;
+                bbox = [parseFloat(b['@_minx']), parseFloat(b['@_miny']), parseFloat(b['@_maxx']), parseFloat(b['@_maxy'])];
+            }
+            layers.push({ name, title, bbox });
+        }
+        firstArray(node.Layer).forEach(walk);
+    };
+    walk(topLayer);
+    if (!layers.length) return null;
+    if (wanted) {
+        const i = layers.findIndex(l => l.name.toLowerCase() === String(wanted).toLowerCase());
+        if (i > 0) { const w = layers.splice(i, 1)[0]; layers.unshift(w); }
+    }
+    return { url: base, layers: layers.slice(0, 5).map(l => l.name), title: layers[0].title, bbox: layers[0].bbox, version };
+}
+
+// Lee WFS: capabilities -> primera capa -> GetFeature GeoJSON (500 elementos)
+async function fetchWfsGeoJson(downloadUrl) {
+    const base = downloadUrl.split('?')[0];
+    let wanted = null;
+    try {
+        const p = new URL(downloadUrl).searchParams;
+        wanted = p.get('typename') || p.get('TYPENAME') || p.get('typenames') || p.get('layer') || p.get('layers');
+    } catch (e) {}
+    const xml = await fetchTextTimeout(base + '?SERVICE=WFS&REQUEST=GetCapabilities', 15000);
+    const caps = capsParser().parse(xml);
+    const rootKey = Object.keys(caps).find(k => /capabilit/i.test(k)) || Object.keys(caps).find(k => k !== '?xml') || Object.keys(caps)[0];
+    const root = caps[rootKey];
+    if (!root) return null;
+    const list = root.FeatureTypeList || {};
+    const types = firstArray(list.FeatureType).map(t => ({
+        name: String((t.Name !== undefined ? t.Name : '') || ''),
+        title: String((t.Title !== undefined ? t.Title : t.Name) || '')
+    })).filter(t => t.name);
+    if (!types.length) return null;
+    let chosen = types[0];
+    if (wanted) {
+        const f = types.find(t => t.name.toLowerCase() === String(wanted).toLowerCase());
+        if (f) chosen = f;
+    }
+    const queries = [
+        base + '?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAME=' + encodeURIComponent(chosen.name) + '&OUTPUTFORMAT=application/json&COUNT=500',
+        base + '?SERVICE=WFS&VERSION=1.1.0&REQUEST=GetFeature&TYPENAME=' + encodeURIComponent(chosen.name) + '&OUTPUTFORMAT=application/json&MAXFEATURES=500'
+    ];
+    for (const q of queries) {
+        try {
+            const gj = JSON.parse(await fetchTextTimeout(q, 20000));
+            if (gj && gj.type === 'FeatureCollection' && Array.isArray(gj.features) && gj.features.length) return gj;
+        } catch (e) {}
+    }
+    return null;
+}
+
 app.get('/api/datasets', async (req, res) => {
     try {
         const response = await fetch('https://datosabiertos.regiondemurcia.es/api/3/action/package_search?rows=1000&sort=metadata_modified+desc');
@@ -203,11 +305,24 @@ app.post('/api/fetch-dataset-content', async (req, res) => {
 
         if (!downloadUrl) return res.status(400).json({ error: "El recurso no dispone de URL de descarga." });
 
-        // Los servicios WMS/WFS de verdad son solo un enlace (no hay archivo
-        // que descargar). Se devuelve antes de intentar descargar nada.
+        // Los servicios WMS/WFS se intentan incrustar como mapa de verdad
+        // (los enlaces guardados en el catálogo suelen estar rotos o ser
+        // solo una leyenda). Si no se puede, se devuelve el enlace como antes.
         const isFileUrl = /\.(zip|kmz|kml|xml|csv|xls|xlsx|json|geojson)(\?|$)/.test(urlLower);
+        const wantsWfs = fmt === 'WFS' || (!isFileUrl && urlLower.includes('wfs'));
         const isWmsService = fmt === 'WMS' || fmt === 'WFS' || (!isFileUrl && (urlLower.includes('wms') || urlLower.includes('wfs')));
         if (isWmsService) {
+            try {
+                if (wantsWfs) {
+                    const gj = await fetchWfsGeoJson(downloadUrl);
+                    if (gj) return res.json({ isGeoJson: true, geojson: gj });
+                } else {
+                    const wms = await fetchWmsConfig(downloadUrl);
+                    if (wms) return res.json({ isMap: true, format: 'WMS', wms: wms, mapUrl: downloadUrl });
+                }
+            } catch (e) {
+                console.warn('WMS/WFS incrustado falló, doy enlace:', e.message);
+            }
             return res.json({ isMap: true, format: fmt || 'WMS', mapUrl: downloadUrl });
         }
 

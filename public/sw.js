@@ -1,5 +1,5 @@
 /* Service Worker – Visor Murcia PWA */
-const CACHE_NAME = 'visor-murcia-v2';
+const CACHE_NAME = 'visor-murcia-v3';
 const APP_SHELL = [
   './',
   './index.html',
@@ -22,6 +22,11 @@ self.addEventListener('activate', (event) => {
       Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
+});
+
+// La página puede pedir que la nueva versión tome el mando ya
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 // Fetch: Cache First para app shell, Network First para API/datos

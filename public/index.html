@@ -195,12 +195,21 @@
             if (isLocal) return remote ? [rel, remote] : [rel];
             return remote ? [remote, rel] : [rel];
         }
+        async function fetchTimeout(url, opts, ms) {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), ms || 20000);
+            try {
+                return await fetch(url, Object.assign({}, opts, { signal: ctrl.signal }));
+            } finally { clearTimeout(t); }
+        }
         async function apiPost(path, body) {
             const tries = backendFirst([path]);
             let lastErr;
             for (const u of tries) {
                 try {
-                    const r = await fetch(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                    // 50 s máx: en móvil con datos lentos no se queda colgado,
+                    // pasa al plan B del navegador.
+                    const r = await fetchTimeout(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 50000);
                     if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
                     return await r.json();
                 } catch(e){ lastErr = e; }
@@ -211,7 +220,9 @@
             const tries = backendFirst(['/api/datasets']);
             for (const u of tries) {
                 try {
-                    const r = await fetch(u);
+                    // 15 s máx: si el backend tarda (móvil lento), usa el
+                    // catálogo guardado en vez de dejar la pantalla vacía.
+                    const r = await fetchTimeout(u, {}, 15000);
                     if (r.ok) { const j = await r.json(); if (Array.isArray(j) && j.length) return { data: j, via: u }; }
                 } catch(e){}
             }
@@ -459,6 +470,31 @@
                             addGeoJsonToMap(toGeoJSON.kml(dom));
                             return;
                         }
+                        if (data.wms && data.wms.url && data.wms.layers && data.wms.layers.length) {
+                            // WMS incrustado como capa de teselas sobre el mapa
+                            renderMapViewer();
+                            try {
+                                L.tileLayer.wms(data.wms.url, {
+                                    layers: data.wms.layers.join(','),
+                                    format: 'image/png',
+                                    transparent: true,
+                                    version: data.wms.version || '1.1.1',
+                                    attribution: 'CARM · Datos Abiertos'
+                                }).addTo(mapInstance);
+                                const bb = data.wms.bbox;
+                                if (bb && bb.length === 4 && bb.every(function(n){ return isFinite(n); })) {
+                                    mapInstance.fitBounds([[bb[1], bb[0]], [bb[3], bb[2]]]);
+                                }
+                            } catch(e){ console.warn('WMS error', e); }
+                            const viewerBodyEl = document.getElementById('viewer-body');
+                            viewerBodyEl.style.flexDirection = 'column';
+                            const note = document.createElement('div');
+                            note.className = 'p-2 text-center text-xs text-gray-500';
+                            const safeTitle = data.wms.title ? String(data.wms.title).replace(/</g,'&lt;') + ' · ' : '';
+                            note.innerHTML = safeTitle + '<a href="' + String(resource.downloadUrl || '').replace(/"/g,'&quot;') + '" target="_blank" rel="noopener" class="text-blue-600 underline">Abrir servicio original</a>';
+                            viewerBodyEl.appendChild(note);
+                            return;
+                        }
                         if (data.isMap && data.mapUrl) {
                             // Solo es final si es un servicio WMS/WFS de verdad.
                             // Si es un archivo (zip/shp/csv...) seguimos abajo con el
@@ -623,6 +659,7 @@
 
         function renderTableViewer(headers, rows) {
             const viewerBody = document.getElementById('viewer-body');
+            viewerBody.style.flexDirection = '';
             if (!rows.length) { viewerBody.innerHTML = '<div class="text-gray-400 text-sm p-8 text-center">El recurso no contiene registros.</div>'; return; }
             let html = '<div class="w-full overflow-auto max-h-[500px] border border-gray-200 rounded-lg"><table class="w-full text-left border-collapse text-xs bg-white"><thead class="bg-gray-100 sticky top-0 border-b border-gray-200"><tr>';
             headers.forEach(h => { html += '<th class="p-2.5 font-semibold text-gray-700 uppercase">' + (h || '').toString().replace(/</g,'&lt;') + '</th>'; });
@@ -637,6 +674,7 @@
 
         function renderMapViewer() {
             const viewerBody = document.getElementById('viewer-body');
+            viewerBody.style.flexDirection = '';
             viewerBody.innerHTML = '<div id="map"></div>';
             if (mapInstance) { mapInstance.remove(); mapInstance = null; }
             mapInstance = L.map('map').setView([37.9922, -1.1307], 10);
@@ -682,9 +720,34 @@
         window.addEventListener('online', updateOnlineBar);
         window.addEventListener('offline', updateOnlineBar);
 
-        // PWA: registro SW + botón instalar
+        // PWA: registro SW + botón instalar + auto-actualización
+        // (en el móvil la app se quedaba con la versión vieja guardada)
         if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(()=>{}); });
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js').then((reg) => {
+                    const check = () => reg.update().catch(()=>{});
+                    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+                    if (reg.waiting) notifyUpdate(reg.waiting);
+                    reg.addEventListener('updatefound', () => {
+                        const w = reg.installing;
+                        if (w) w.addEventListener('statechange', () => {
+                            if (w.state === 'installed' && navigator.serviceWorker.controller) notifyUpdate(w);
+                        });
+                    });
+                }).catch(()=>{});
+            });
+            let reloadedOnce = false;
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                if (!reloadedOnce) { reloadedOnce = true; window.location.reload(); }
+            });
+        }
+        function notifyUpdate(worker) {
+            const bar = document.createElement('div');
+            bar.style.cssText = 'position:fixed;bottom:12px;left:12px;right:12px;background:#8A252C;color:#fff;padding:10px 14px;border-radius:10px;font-size:13px;text-align:center;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.3)';
+            bar.textContent = 'Hay una versión nueva de la app, actualizando…';
+            document.body.appendChild(bar);
+            try { worker.postMessage({ type: 'SKIP_WAITING' }); }
+            catch(e){ window.location.reload(); }
         }
         let deferredPrompt = null;
         window.addEventListener('beforeinstallprompt', (e) => {
