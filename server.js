@@ -1,9 +1,6 @@
 const express = require('express');
-const { XMLParser } = require('fast-xml-parser');
-const XLSX = require('xlsx');
-const cheerio = require('cheerio');
-const AdmZip = require('adm-zip');
-const shapefile = require('shapefile');
+// Nota: XLSX/AdmZip/shapefile se cargan DENTRO del handler (lazy) para que
+// el arranque en serverless (Vercel 10s) sea rápido. XMLParser/cheerio sobraban.
 const proj4 = require('proj4');
 
 const fs = require('fs');
@@ -179,6 +176,7 @@ app.post('/api/fetch-dataset-content', async (req, res) => {
         // 2. KMZ (Extraer el XML/KML de dentro del ZIP al igual que un KML)
         if (urlLower.endsWith('.kmz') || fmt === 'KMZ') {
             try {
+                const AdmZip = require('adm-zip');
                 const zip = new AdmZip(buffer);
                 for (let entry of zip.getEntries()) {
                     const name = entry.entryName.toLowerCase();
@@ -195,6 +193,8 @@ app.post('/api/fetch-dataset-content', async (req, res) => {
         // 3. SHAPEFILES EN ZIP (Con lectura robusta y conversión automática de coordenadas UTM a Grados)
         if (urlLower.endsWith('.zip') || fmt === 'SHP' || fmt === 'ZIP') {
             try {
+                const AdmZip = require('adm-zip');
+                const shapefile = require('shapefile');
                 const zip = new AdmZip(buffer);
                 let shpBuffer = null;
                 let dbfBuffer = null;
@@ -265,6 +265,7 @@ app.post('/api/fetch-dataset-content', async (req, res) => {
         }
 
         if (fmt.includes('XLS') || urlLower.endsWith('.xls') || urlLower.endsWith('.xlsx')) {
+            const XLSX = require('xlsx');
             const workbook = XLSX.read(buffer, { type: 'buffer' });
             const worksheet = workbook.Sheets[workbook.SheetNames[0]];
             const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
