@@ -44,6 +44,56 @@ function transformCoordinates(coords, sourceProj) {
     return coords.map(subCoords => transformCoordinates(subCoords, sourceProj));
 }
 
+// Decodifica un buffer de texto detectando UTF-16 (algunos CSV vienen así)
+function decodeEntryText(buf) {
+    const n = Math.min(buf.length, 1000);
+    for (let i = 0; i < n; i++) {
+        if (buf[i] === 0) return buf.toString('utf16le').replace(/^\uFEFF/, '');
+    }
+    return buf.toString('utf8').replace(/^\uFEFF/, '');
+}
+
+// Helpers para reutilizar el parseo de tablas (también dentro de ZIPs)
+function parseCsvText(text) {
+    const lines = (text || '').split(/\r?\n/).filter(l => l.trim() !== '');
+    if (lines.length < 2) return null;
+    const first = lines[0];
+    if (!first.includes(';') && !first.includes(',')) return null;
+    const separator = first.includes(';') ? ';' : ',';
+    const headers = first.split(separator).map(h => h.replace(/^["']|["']$/g, '').trim()).filter(h => h !== '');
+    if (headers.length < 1) return null;
+    // Si la primera línea parece binaria, no es CSV
+    if (/[\uFFFD\u0000]/.test(first) || first.length > 20000) return null;
+    let rows = [];
+    for (let i = 1; i < Math.min(lines.length, 301); i++) {
+        const cur = lines[i].split(separator);
+        let o = {};
+        headers.forEach((h, ix) => { o[h] = cur[ix] !== undefined ? cur[ix].replace(/^["']|["']$/g, '').trim() : ''; });
+        rows.push(o);
+    }
+    if (!rows.length) return null;
+    return { headers, rows };
+}
+
+function parseExcelBuffer(buf) {
+    try {
+        const XLSX = require('xlsx');
+        const workbook = XLSX.read(buf, { type: 'buffer' });
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+        if (!jsonData.length) return null;
+        const headers = Object.keys(jsonData[0]);
+        const rows = jsonData.map(item => {
+            let o = {};
+            headers.forEach(h => { o[h] = item[h] !== undefined ? String(item[h]) : ''; });
+            return o;
+        });
+        return { headers, rows };
+    } catch (e) {
+        return null;
+    }
+}
+
 app.get('/api/datasets', async (req, res) => {
     try {
         const response = await fetch('https://datosabiertos.regiondemurcia.es/api/3/action/package_search?rows=1000&sort=metadata_modified+desc');
@@ -153,28 +203,45 @@ app.post('/api/fetch-dataset-content', async (req, res) => {
 
         if (!downloadUrl) return res.status(400).json({ error: "El recurso no dispone de URL de descarga." });
 
-        const fileRes = await fetch(downloadUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive'
-            }
-        });
-        
-        const arrayBuffer = await fileRes.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        const textData = buffer.toString('utf8');
-        const cleanText = textData.trim();
+        // Los servicios WMS/WFS de verdad son solo un enlace (no hay archivo
+        // que descargar). Se devuelve antes de intentar descargar nada.
+        const isFileUrl = /\.(zip|kmz|kml|xml|csv|xls|xlsx|json|geojson)(\?|$)/.test(urlLower);
+        const isWmsService = fmt === 'WMS' || fmt === 'WFS' || (!isFileUrl && (urlLower.includes('wms') || urlLower.includes('wfs')));
+        if (isWmsService) {
+            return res.json({ isMap: true, format: fmt || 'WMS', mapUrl: downloadUrl });
+        }
+
+        // Descarga del archivo. Si falla, no nos rendimos: abajo se intenta
+        // el datastore de CKAN, que no necesita el archivo.
+        let buffer = null;
+        let textData = '';
+        let cleanText = '';
+        try {
+            const fileRes = await fetch(downloadUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive'
+                }
+            });
+            if (!fileRes.ok) throw new Error('HTTP ' + fileRes.status);
+            const arrayBuffer = await fileRes.arrayBuffer();
+            buffer = Buffer.from(arrayBuffer);
+            textData = buffer.toString('utf8');
+            cleanText = textData.trim();
+        } catch (dlErr) {
+            console.warn('Descarga directa falló, pruebo datastore:', downloadUrl, dlErr.message);
+        }
 
         // 1. KML / XML directo
-        if (fmt === 'KML' || fmt === 'XML' || urlLower.endsWith('.kml') || urlLower.endsWith('.xml') || cleanText.includes('<kml') || cleanText.includes('<document>') || cleanText.startsWith('<?xml')) {
+        if (buffer && (fmt === 'KML' || fmt === 'XML' || urlLower.endsWith('.kml') || urlLower.endsWith('.xml') || cleanText.includes('<kml') || cleanText.includes('<document>') || cleanText.startsWith('<?xml'))) {
             return res.json({ isMap: true, format: 'KML', rawContent: textData });
         }
 
         // 2. KMZ (Extraer el XML/KML de dentro del ZIP al igual que un KML)
-        if (urlLower.endsWith('.kmz') || fmt === 'KMZ') {
+        if (buffer && (urlLower.endsWith('.kmz') || fmt === 'KMZ')) {
             try {
                 const AdmZip = require('adm-zip');
                 const zip = new AdmZip(buffer);
@@ -191,7 +258,7 @@ app.post('/api/fetch-dataset-content', async (req, res) => {
         }
 
         // 3. SHAPEFILES EN ZIP (Con lectura robusta y conversión automática de coordenadas UTM a Grados)
-        if (urlLower.endsWith('.zip') || fmt === 'SHP' || fmt === 'ZIP') {
+        if (buffer && (urlLower.endsWith('.zip') || fmt === 'SHP' || fmt === 'ZIP')) {
             try {
                 const AdmZip = require('adm-zip');
                 const shapefile = require('shapefile');
@@ -234,53 +301,72 @@ app.post('/api/fetch-dataset-content', async (req, res) => {
                         return res.json({ isGeoJson: true, geojson: geojson, prj: prjText || 'EPSG:25830' });
                     }
                 }
+
+                // Si el ZIP no era un SHP (p. ej. un CSV/XLS comprimido), busca
+                // tablas dentro del ZIP antes de rendirse.
+                try {
+                    const zip2 = new AdmZip(buffer);
+                    for (let entry of zip2.getEntries()) {
+                        const name = entry.entryName.toLowerCase();
+                        if (name.includes('__macosx')) continue;
+                        const entryBuf = entry.getData();
+                        if (name.endsWith('.kml') || name.endsWith('.xml')) {
+                            return res.json({ isMap: true, format: 'KML', rawContent: entryBuf.toString('utf8') });
+                        }
+                        if (name.endsWith('.geojson') || name.endsWith('.json')) {
+                            try {
+                                const gj = JSON.parse(entryBuf.toString('utf8'));
+                                if (gj.type === 'FeatureCollection' && gj.features) return res.json({ isGeoJson: true, geojson: gj });
+                            } catch (e) {}
+                        }
+                        if (name.endsWith('.csv')) {
+                            const parsed = parseCsvText(decodeEntryText(entryBuf));
+                            if (parsed) return res.json(parsed);
+                        }
+                        if (name.endsWith('.xls') || name.endsWith('.xlsx')) {
+                            const parsed = parseExcelBuffer(entryBuf);
+                            if (parsed) return res.json(parsed);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error buscando tablas en ZIP:", e);
+                }
             } catch (shapeErr) {
                 console.error("Error leyendo Shapefile ZIP:", shapeErr);
             }
         }
 
-        if (fmt === 'WMS' || urlLower.includes('wms') || type === 'C') {
-            return res.json({ isMap: true, format: fmt || 'WMS', mapUrl: downloadUrl });
-        }
-
         if (type === 'A' || datastoreActive) {
-            const datastoreUrl = `https://datosabiertos.regiondemurcia.es/api/3/action/datastore_search?resource_id=${resourceId}&limit=300`;
-            const response = await fetch(datastoreUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-            const data = await response.json();
+            try {
+                const datastoreUrl = `https://datosabiertos.regiondemurcia.es/api/3/action/datastore_search?resource_id=${resourceId}&limit=300`;
+                const response = await fetch(datastoreUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+                const data = await response.json();
 
-            if (data.success && data.result && data.result.records) {
-                const records = data.result.records;
-                const rawFields = data.result.fields ? data.result.fields.map(f => f.id) : Object.keys(records[0]);
-                const headers = rawFields.filter(f => f !== '_id');
-                const rows = records.map(record => {
-                    let rowObj = {};
-                    headers.forEach(h => {
-                        let val = record[h];
-                        rowObj[h] = (val !== null && val !== undefined) ? String(val) : '';
+                if (data.success && data.result && data.result.records) {
+                    const records = data.result.records;
+                    const rawFields = data.result.fields ? data.result.fields.map(f => f.id) : Object.keys(records[0]);
+                    const headers = rawFields.filter(f => f !== '_id');
+                    const rows = records.map(record => {
+                        let rowObj = {};
+                        headers.forEach(h => {
+                            let val = record[h];
+                            rowObj[h] = (val !== null && val !== undefined) ? String(val) : '';
+                        });
+                        return rowObj;
                     });
-                    return rowObj;
-                });
-                return res.json({ headers, rows });
+                    return res.json({ headers, rows });
+                }
+            } catch (dsErr) {
+                console.warn('Datastore falló:', dsErr.message);
             }
         }
 
-        if (fmt.includes('XLS') || urlLower.endsWith('.xls') || urlLower.endsWith('.xlsx')) {
-            const XLSX = require('xlsx');
-            const workbook = XLSX.read(buffer, { type: 'buffer' });
-            const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-            const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
-            if (jsonData.length > 0) {
-                const headers = Object.keys(jsonData[0]);
-                const rows = jsonData.map(item => {
-                    let rowObj = {};
-                    headers.forEach(h => { rowObj[h] = item[h] !== undefined ? String(item[h]) : ''; });
-                    return rowObj;
-                });
-                return res.json({ headers, rows });
-            }
+        if (buffer && (fmt.includes('XLS') || urlLower.endsWith('.xls') || urlLower.endsWith('.xlsx'))) {
+            const parsed = parseExcelBuffer(buffer);
+            if (parsed) return res.json(parsed);
         }
 
-        if (cleanText.startsWith('[') || cleanText.startsWith('{')) {
+        if (buffer && (cleanText.startsWith('[') || cleanText.startsWith('{'))) {
             try {
                 const jsonData = JSON.parse(cleanText);
                 const jsonArray = Array.isArray(jsonData) ? jsonData : (jsonData.result || jsonData.data || jsonData.rows || jsonData.records || null);
@@ -347,20 +433,17 @@ app.post('/api/fetch-dataset-content', async (req, res) => {
             }
         }
 
-        const lines = textData.split(/\r?\n/).filter(l => l.trim() !== '');
-        if (lines.length > 0) {
-            const separator = lines[0].includes(';') ? ';' : ',';
-            const headers = lines[0].split(separator).map(h => h.replace(/^["']|["']$/g, '').trim());
-            let rows = [];
-            for (let i = 1; i < Math.min(lines.length, 300); i++) {
-                const currentLine = lines[i].split(separator);
-                let rowObj = {};
-                headers.forEach((h, index) => {
-                    rowObj[h] = currentLine[index] !== undefined ? currentLine[index].replace(/^["']|["']$/g, '').trim() : '';
-                });
-                rows.push(rowObj);
-            }
-            return res.json({ headers, rows });
+        // CSV de texto. No intentar con ZIPs binarios (daban tablas basura).
+        const isZipLike = urlLower.endsWith('.zip') || fmt === 'SHP' || fmt === 'ZIP';
+        if (!isZipLike) {
+            const parsed = parseCsvText(textData);
+            if (parsed) return res.json(parsed);
+        }
+
+        // Último recurso: si era un recurso de mapa y nada se pudo leer,
+        // devolver el enlace para que al menos se pueda abrir/descargar.
+        if (type === 'C' || fmt === 'SHP' || fmt === 'ZIP' || fmt === 'KMZ' || fmt === 'KML') {
+            return res.json({ isMap: true, format: fmt || 'MAP', mapUrl: downloadUrl });
         }
 
         res.status(404).json({ error: "No se pudieron procesar los datos de este recurso." });

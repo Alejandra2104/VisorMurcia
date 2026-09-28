@@ -186,9 +186,17 @@
         const BACKEND_URL = new URLSearchParams(location.search).get('api')
             || localStorage.getItem('visor_api')
             || 'https://visor-murcia.vercel.app';
+        // En local se prueba primero el backend local; en GitHub Pages primero
+        // Vercel (igual que en local). Así la app ve lo mismo en los dos sitios.
+        function backendFirst(paths) {
+            const isLocal = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+            const rel = paths[0];
+            const remote = BACKEND_URL ? BACKEND_URL.replace(/\/$/, '') + paths[0] : null;
+            if (isLocal) return remote ? [rel, remote] : [rel];
+            return remote ? [remote, rel] : [rel];
+        }
         async function apiPost(path, body) {
-            const tries = [path];
-            if (BACKEND_URL) tries.push(BACKEND_URL.replace(/\/$/, '') + path);
+            const tries = backendFirst([path]);
             let lastErr;
             for (const u of tries) {
                 try {
@@ -200,8 +208,7 @@
             throw lastErr;
         }
         async function apiGetDatasets() {
-            const tries = ['/api/datasets'];
-            if (BACKEND_URL) tries.push(BACKEND_URL.replace(/\/$/, '') + '/api/datasets');
+            const tries = backendFirst(['/api/datasets']);
             for (const u of tries) {
                 try {
                     const r = await fetch(u);
@@ -453,8 +460,20 @@
                             return;
                         }
                         if (data.isMap && data.mapUrl) {
-                            viewerBody.innerHTML = '<div class="p-8 text-center text-gray-500 text-sm">Servicio WMS disponible. <a href="' + data.mapUrl + '" target="_blank" rel="noopener" class="text-blue-600 underline font-semibold">Abrir enlace WMS</a></div>';
-                            return;
+                            // Solo es final si es un servicio WMS/WFS de verdad.
+                            // Si es un archivo (zip/shp/csv...) seguimos abajo con el
+                            // plan B del navegador en vez de quedarnos en "solo enlace".
+                            const u = (resource.downloadUrl || '').toLowerCase();
+                            const f = (resource.format || '').toUpperCase();
+                            const isFile = u.endsWith('.zip') || u.endsWith('.kmz') || u.endsWith('.kml')
+                                || u.endsWith('.csv') || u.endsWith('.xls') || u.endsWith('.xlsx')
+                                || u.endsWith('.json') || u.endsWith('.geojson')
+                                || ['SHP','ZIP','KMZ','KML','CSV','XLS','XLSX','JSON','GEOJSON'].includes(f);
+                            if (!isFile) {
+                                viewerBody.innerHTML = '<div class="p-8 text-center text-gray-500 text-sm">Servicio WMS disponible. <a href="' + data.mapUrl + '" target="_blank" rel="noopener" class="text-blue-600 underline font-semibold">Abrir enlace WMS</a></div>';
+                                return;
+                            }
+                            // Es archivo: no volvemos, seguimos al plan B de abajo.
                         }
                     }
                 } catch(e){ console.warn('Backend no disponible, sigo en navegador', e); }

@@ -1,5 +1,5 @@
 /* Service Worker – Visor Murcia PWA */
-const CACHE_NAME = 'visor-murcia-v1';
+const CACHE_NAME = 'visor-murcia-v2';
 const APP_SHELL = [
   './',
   './index.html',
@@ -26,12 +26,18 @@ self.addEventListener('activate', (event) => {
 
 // Fetch: Cache First para app shell, Network First para API/datos
 self.addEventListener('fetch', (event) => {
+  // Nunca cachear POSTs (p. ej. /api/fetch-dataset-content): solo van a red.
+  if (event.request.method !== 'GET') return;
+
   const url = new URL(event.request.url);
 
-  // No interceptar peticiones a CKAN ni a proxies CORS (siempre red)
+  // No interceptar peticiones a CKAN, al backend ni a proxies CORS (siempre red)
   if (url.hostname.includes('regiondemurcia.es') ||
+      url.hostname.includes('vercel.app') ||
+      url.hostname.includes('onrender.com') ||
       url.hostname.includes('corsproxy.io') ||
-      url.hostname.includes('allorigins')) {
+      url.hostname.includes('allorigins') ||
+      url.hostname.includes('codetabs.com')) {
     return;
   }
 
