@@ -24,7 +24,7 @@ jobs:
           node-version: 20
       # Genera datasets.json fresco en cada deploy (evita CORS en el navegador).
       # Si CKAN falla, se sigue con el datasets.json commiteado.
-      - run: node scripts/build-catalog.mjs ./datasets.json || echo "Aviso: CKAN fallo, uso datasets.json commiteado"
+      - run: node scripts/build-catalog.mjs ./datasets.json || echo "Aviso CKAN fallo, uso datasets.json commiteado"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
