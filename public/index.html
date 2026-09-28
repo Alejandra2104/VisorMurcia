@@ -689,12 +689,11 @@
             if (mapInstance) { mapInstance.remove(); mapInstance = null; }
             // preferCanvas: los mapas con miles de figuras van fluido en el móvil
             mapInstance = L.map('map', { preferCanvas: true }).setView([37.9922, -1.1307], 10);
-            // Dos fondos de calles: el directo de OSM se bloquea a veces con
-            // datos móviles (IP compartida), el de CARTO suele pasar siempre.
-            const baseCarto = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { maxZoom: 20, attribution: '© OpenStreetMap contributors © CARTO' });
+            // Dos fondos de calles (botón arriba a la derecha del mapa).
+            const baseEsri = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics' });
             const baseOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' });
-            baseCarto.addTo(mapInstance);
-            L.control.layers({ 'Calles': baseCarto, 'Calles (OSM)': baseOSM }, null, { position: 'topright' }).addTo(mapInstance);
+            baseEsri.addTo(mapInstance);
+            L.control.layers({ 'Calles': baseEsri, 'Calles (OSM)': baseOSM }, null, { position: 'topright' }).addTo(mapInstance);
         }
 
         function addGeoJsonToMap(geojson) {
