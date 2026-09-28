@@ -366,6 +366,10 @@ app.post('/api/fetch-dataset-content', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`Visor avanzado activo en http://localhost:${PORT}`);
-});
+if (!process.env.VERCEL) {
+    app.listen(PORT, () => {
+        console.log(`Visor avanzado activo en http://localhost:${PORT}`);
+    });
+}
+
+module.exports = app;
