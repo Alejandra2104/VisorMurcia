@@ -17,7 +17,7 @@
     "cheerio": "^1.2.0",
     "csv-parse": "^7.0.2",
     "dbf-parser": "^0.0.1",
-    "express": "^5.2.1",
+    "express": "^4.22.3",
     "fast-xml-parser": "^5.11.0",
     "node-fetch": "^3.3.2",
     "proj4": "^2.21.0",

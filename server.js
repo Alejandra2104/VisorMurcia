@@ -49,7 +49,7 @@ function transformCoordinates(coords, sourceProj) {
 
 app.get('/api/datasets', async (req, res) => {
     try {
-        const response = await fetch('https://datosabiertos.regiondemurcia.es/api/3/action/package_search?rows=5000&sort=metadata_modified+desc');
+        const response = await fetch('https://datosabiertos.regiondemurcia.es/api/3/action/package_search?rows=1000&sort=metadata_modified+desc');
         const data = await response.json();
 
         if (!data.success) return res.status(500).json({ error: "Error en la API" });
