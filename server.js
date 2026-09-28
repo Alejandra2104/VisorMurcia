@@ -44,6 +44,15 @@ function transformCoordinates(coords, sourceProj) {
     return coords.map(subCoords => transformCoordinates(subCoords, sourceProj));
 }
 
+// Recorta decimales (6 = precisión de ~10 cm) para que el mapa pese
+// la mitad y el móvil no se ahogue. Vale para cualquier geometría.
+function roundCoords(coords) {
+    if (Array.isArray(coords) && typeof coords[0] === 'number') {
+        return coords.map(n => typeof n === 'number' ? Math.round(n * 1e6) / 1e6 : n);
+    }
+    return coords.map(roundCoords);
+}
+
 // Decodifica un buffer de texto detectando UTF-16 (algunos CSV vienen así)
 function decodeEntryText(buf) {
     const n = Math.min(buf.length, 1000);
@@ -190,7 +199,14 @@ async function fetchWfsGeoJson(downloadUrl) {
     for (const q of queries) {
         try {
             const gj = JSON.parse(await fetchTextTimeout(q, 20000));
-            if (gj && gj.type === 'FeatureCollection' && Array.isArray(gj.features) && gj.features.length) return gj;
+            if (gj && gj.type === 'FeatureCollection' && Array.isArray(gj.features) && gj.features.length) {
+                gj.features.forEach(f => {
+                    if (f.geometry && f.geometry.coordinates) {
+                        f.geometry.coordinates = roundCoords(f.geometry.coordinates);
+                    }
+                });
+                return gj;
+            }
         } catch (e) {}
     }
     return null;
@@ -408,7 +424,13 @@ app.post('/api/fetch-dataset-content', async (req, res) => {
                         if (sourceProj !== 'EPSG:4326') {
                             geojson.features.forEach(feature => {
                                 if (feature.geometry && feature.geometry.coordinates) {
-                                    feature.geometry.coordinates = transformCoordinates(feature.geometry.coordinates, sourceProj);
+                                    feature.geometry.coordinates = roundCoords(transformCoordinates(feature.geometry.coordinates, sourceProj));
+                                }
+                            });
+                        } else {
+                            geojson.features.forEach(feature => {
+                                if (feature.geometry && feature.geometry.coordinates) {
+                                    feature.geometry.coordinates = roundCoords(feature.geometry.coordinates);
                                 }
                             });
                         }

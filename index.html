@@ -677,7 +677,8 @@
             viewerBody.style.flexDirection = '';
             viewerBody.innerHTML = '<div id="map"></div>';
             if (mapInstance) { mapInstance.remove(); mapInstance = null; }
-            mapInstance = L.map('map').setView([37.9922, -1.1307], 10);
+            // preferCanvas: los mapas con miles de figuras van fluido en el móvil
+            mapInstance = L.map('map', { preferCanvas: true }).setView([37.9922, -1.1307], 10);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' }).addTo(mapInstance);
         }
 
@@ -742,12 +743,17 @@
             });
         }
         function notifyUpdate(worker) {
+            if (document.getElementById('update-bar')) return;
             const bar = document.createElement('div');
+            bar.id = 'update-bar';
             bar.style.cssText = 'position:fixed;bottom:12px;left:12px;right:12px;background:#8A252C;color:#fff;padding:10px 14px;border-radius:10px;font-size:13px;text-align:center;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.3)';
-            bar.textContent = 'Hay una versión nueva de la app, actualizando…';
+            bar.innerHTML = 'Hay una versión nueva de la app. <button id="update-btn" style="margin-left:8px;background:#fff;color:#8A252C;font-weight:bold;padding:4px 12px;border-radius:8px;">Actualizar</button>';
             document.body.appendChild(bar);
-            try { worker.postMessage({ type: 'SKIP_WAITING' }); }
-            catch(e){ window.location.reload(); }
+            document.getElementById('update-btn').addEventListener('click', () => {
+                bar.textContent = 'Actualizando…';
+                try { worker.postMessage({ type: 'SKIP_WAITING' }); }
+                catch(e){ window.location.reload(); }
+            });
         }
         let deferredPrompt = null;
         window.addEventListener('beforeinstallprompt', (e) => {
