@@ -1,0 +1,33 @@
+{
+  "name": "Visor Murcia – Datos Abiertos",
+  "short_name": "Visor Murcia",
+  "description": "Visor tabular y geográfico de Datos Abiertos de la Región de Murcia. Multiplataforma (móvil y escritorio).",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#8A252C",
+  "lang": "es",
+  "categories": ["government", "utilities", "navigation"],
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
