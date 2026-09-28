@@ -22,14 +22,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      # Genera datasets.json fresco en cada deploy (evita CORS en el navegador)
-      - run: node scripts/build-catalog.mjs ./datasets.json
+      # Genera datasets.json fresco en cada deploy (evita CORS en el navegador).
+      # Si CKAN falla, se sigue con el datasets.json commiteado.
+      - run: node scripts/build-catalog.mjs ./datasets.json || echo "Aviso: CKAN fallo, uso datasets.json commiteado"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           # Se publica la raíz (index.html + manifest + sw + icons + datasets.json).
           # server.js se ignora en Pages (solo sirve para `npm start` en local).
-          path: .
+          path: '.'
   deploy:
     environment:
       name: github-pages
