@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Región de Murcia: Visor Tabular y Geográfico - Datos Abiertos</title>
+    <meta name="description" content="Visor tabular y geográfico de Datos Abiertos de la Región de Murcia. App multiplataforma instalable (PWA).">
+    <meta name="theme-color" content="#8A252C">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+    <link rel="apple-touch-icon" href="./icons/icon-192.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Visor Murcia">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://unpkg.com/@mapbox/togeojson@0.16.0/togeojson.js"></script>
+    <!-- Librerías solo-frontend para Pages (sustituyen a server.js) -->
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/shpjs@4.0.4/dist/shp.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+    <style>
+        .bg-murcia-red { background-color: #8A252C; }
+        .hover\:bg-murcia-red-dark:hover { background-color: #6E1C22; }
+        .text-murcia-red { color: #8A252C; }
+        .border-murcia-red { border-color: #8A252C; }
+        #map { height: 450px; width: 100%; border-radius: 0.5rem; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #8A252C; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans min-h-screen flex flex-col">
+
+    <header class="bg-murcia-red text-white shadow-md">
+        <div class="max-w-7xl mx-auto px-4 py-6 flex flex-col md:flex-row justify-between items-start md:items-center">
+            <div class="space-y-1">
+                <h1 class="text-3xl md:text-4xl font-extrabold tracking-tight">Región de Murcia: Visor Tabular y Geográfico</h1>
+                <h2 class="text-lg md:text-xl font-medium text-red-100">Datos Abiertos</h2>
+                <p class="text-xs md:text-sm text-red-200/90 font-light">App multiplataforma (PWA) · GitHub Pages · Sin servidor</p>
+            </div>
+            <div class="mt-4 md:mt-0 flex items-center gap-2">
+                <div class="bg-white/10 px-4 py-2 rounded-lg border border-white/20 text-sm shrink-0">
+                    <span id="dataset-counter" class="font-bold text-white">0</span> datasets
+                </div>
+                <button id="btn-install" class="hidden bg-white text-[#8A252C] text-sm px-3 py-2 rounded-lg font-bold shadow">
+                    <i class="fa-solid fa-download mr-1"></i>Instalar app
+                </button>
+            </div>
+        </div>
+        <div id="offline-bar" class="hidden text-center text-xs bg-yellow-400 text-yellow-900 py-1 font-semibold">Sin conexión: mostrando datos en caché</div>
+    </header>
+
+    <section class="max-w-7xl mx-auto px-4 mt-6 w-full">
+        <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Buscar recurso</label>
+                <input type="text" id="filter-search" placeholder="Título, organización..." class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8A252C] focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Categoría</label>
+                <select id="filter-category" class="w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8A252C] focus:outline-none bg-white">
+                    <option value="ALL">Todas las categorías</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Tema</label>
+                <select id="filter-theme" class="w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8A252C] focus:outline-none bg-white">
+                    <option value="ALL">Todos los temas</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Tipo de Recurso</label>
+                <select id="filter-type" class="w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8A252C] focus:outline-none bg-white">
+                    <option value="ALL">Todos los tipos</option>
+                    <option value="TABLAS">Tablas</option>
+                    <option value="MAPAS">Mapas</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Años</label>
+                <select id="filter-year" class="w-full py-2 px-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#8A252C] focus:outline-none bg-white">
+                    <option value="ALL">Todos</option>
+                </select>
+            </div>
+        </div>
+        <p id="data-source-note" class="text-xs text-gray-400 mt-2"></p>
+    </section>
+
+    <main class="max-w-7xl mx-auto px-4 mt-6 mb-12 flex-grow w-full space-y-6">
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div class="p-4 bg-gray-100 border-b border-gray-200 font-semibold text-sm text-gray-700 flex justify-between items-center">
+                <span>Listado de Datasets</span>
+                <span id="list-count" class="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">0</span>
+            </div>
+            <div id="datasets-container" class="p-4 max-h-[500px] overflow-y-auto grid grid-cols-1 gap-3">
+                <div class="p-4 text-center text-gray-400 text-sm"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Cargando catálogo…</div>
+            </div>
+        </div>
+
+        <div id="viewer-section" class="hidden bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div class="p-4 bg-gray-100 border-b border-gray-200 flex flex-col space-y-3">
+                <div class="flex justify-between items-center">
+                    <h3 id="viewer-title" class="font-semibold text-base text-gray-900">Título del Dataset</h3>
+                    <div class="flex items-center space-x-2">
+                        <button id="btn-download-excel" class="hidden bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium shadow-sm transition items-center space-x-1">
+                            <i class="fa-solid fa-file-excel"></i><span>Descargar Excel</span>
+                        </button>
+                        <button onclick="closeViewer()" class="text-gray-500 hover:text-gray-700 text-sm px-2 py-1 font-bold">
+                            <i class="fa-solid fa-xmark text-lg"></i> Cerrar Visor
+                        </button>
+                    </div>
+                </div>
+                <div id="format-buttons-container" class="flex flex-wrap gap-2 pt-1"></div>
+            </div>
+            <div id="viewer-body" class="p-4 min-h-[400px] flex items-center justify-center bg-gray-50 text-gray-400 text-sm">
+                Selecciona un formato arriba para visualizar los datos.
+            </div>
+        </div>
+    </main>
+
+    <footer class="bg-white border-t border-gray-200 py-4 text-center text-xs text-gray-500">
+        Plataforma integrada de datos abiertos y cartografía - Región de Murcia · PWA instalable · Desplegada en GitHub Pages
+    </footer>
+
+    <script>
+        // ============ CONFIG ============
+        const CKAN_BASE = 'https://datosabiertos.regiondemurcia.es';
+        const CATALOG_URL = CKAN_BASE + '/api/3/action/package_search?rows=1000&sort=metadata_modified+desc';
+
+        let allDatasets = [];
+        let currentActiveDataset = null;
+        let currentActiveResource = null;
+        let currentLoadedData = null;
+        let mapInstance = null;
+
+        // Proyecciones (igual que server.js)
+        if (typeof proj4 !== 'undefined') {
+            proj4.defs("EPSG:25830", "+proj=utm +zone=30 +ellps=GRS80 +units=m +no_defs");
+            proj4.defs("EPSG:23030", "+proj=utm +zone=30 +ellps=intl +units=m +no_defs");
+            proj4.defs("EPSG:4326", "+proj=longlat +datum=WGS84 +no_defs");
+        }
+        function transformCoordinates(coords, sourceProj) {
+            if (typeof coords[0] === 'number') {
+                if (Math.abs(coords[0]) > 180 || Math.abs(coords[1]) > 90) {
+                    try {
+                        const t = proj4(sourceProj, 'EPSG:4326', [coords[0], coords[1]]);
+                        return [t[0], t[1]];
+                    } catch(e){ return coords; }
+                }
+                return coords;
+            }
+            return coords.map(c => transformCoordinates(c, sourceProj));
+        }
+        function fixGeojsonProjection(geojson, prjText) {
+            let sourceProj = 'EPSG:25830';
+            if (prjText) {
+                if (prjText.includes('23030')) sourceProj = 'EPSG:23030';
+                else if (prjText.includes('4326') || prjText.includes('WGS 84')) sourceProj = 'EPSG:4326';
+            }
+            if (sourceProj === 'EPSG:4326' || typeof proj4 === 'undefined') return geojson;
+            // Solo transforma si parece UTM
+            let needs = false;
+            try {
+                const s = JSON.stringify(geojson).match(/-?\d+\.\d+/g);
+                if (s && s.some(n => Math.abs(parseFloat(n)) > 180)) needs = true;
+            } catch(e){}
+            if (!needs) return geojson;
+            geojson.features.forEach(f => {
+                if (f.geometry && f.geometry.coordinates) {
+                    f.geometry.coordinates = transformCoordinates(f.geometry.coordinates, sourceProj);
+                }
+            });
+            return geojson;
+        }
+
+        // ============ FETCH con fallback CORS (clave para Pages) ============
+        // GitHub Pages es estático y la API CKAN no envía Access-Control-Allow-Origin.
+        // Estrategia: 1) datasets.json generado por Actions (mismo origen, sin CORS),
+        // 2) directo, 3) proxies públicos.
+        function proxyUrls(url) {
+            return [
+                url,
+                'https://corsproxy.io/?url=' + encodeURIComponent(url),
+                'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)
+            ];
+        }
+        async function fetchBufferSmart(url) {
+            let lastErr;
+            for (const u of proxyUrls(url)) {
+                try {
+                    const r = await fetch(u, { headers: { 'Accept': '*/*' } });
+                    if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
+                    return await r.arrayBuffer();
+                } catch(e){ lastErr = e; }
+            }
+            throw lastErr || new Error('No se pudo descargar (CORS/red)');
+        }
+        async function fetchJsonSmart(url) {
+            const buf = await fetchBufferSmart(url);
+            return JSON.parse(new TextDecoder('utf-8').decode(buf));
+        }
+
+        // ============ CATÁLOGO (réplica de /api/datasets de server.js) ============
+        function mapPackagesToDatasets(results) {
+            let map = new Map();
+            results.forEach(pkg => {
+                let year = 2014;
+                if (pkg.metadata_modified) year = new Date(pkg.metadata_modified).getFullYear();
+                else if (pkg.metadata_created) year = new Date(pkg.metadata_created).getFullYear();
+                const org = (pkg.organization && pkg.organization.title) || 'Sin Categoría';
+                const category = (pkg.groups && pkg.groups.length > 0) ? pkg.groups[0].title : 'General';
+                const resources = pkg.resources || [];
+                if (!resources.length) return;
+                let recs = resources.map(r => {
+                    const fmt = (r.format || '').toUpperCase();
+                    const url = r.url || '';
+                    const low = url.toLowerCase();
+                    let type = 'B';
+                    if (r.datastore_active === true) type = 'A';
+                    else if (['WMS','WFS','SHP','KML','KMZ','GEOJSON'].includes(fmt) || low.includes('wms') || low.includes('wfs') || low.endsWith('.zip') || low.endsWith('.kmz')) type = 'C';
+                    let score = 1;
+                    if (fmt === 'JSON' || fmt === 'GEOJSON') score = 5;
+                    else if (fmt.includes('XLS')) score = 4;
+                    else if (r.datastore_active === true) score = 3;
+                    else if (fmt === 'CSV') score = 2;
+                    else if (['KML','SHP','ZIP','KMZ','XML'].includes(fmt)) score = 3;
+                    return { id: r.id, name: r.name || fmt || 'Recurso', format: fmt || 'WEB', downloadUrl: url, datastoreActive: r.datastore_active === true, type, score };
+                });
+                recs = recs.filter((it,i,self) => i === self.findIndex(t => t.downloadUrl === it.downloadUrl));
+                recs.sort((a,b) => b.score - a.score);
+                const key = ((pkg.title||'').trim().toLowerCase()) + '-' + (org.trim().toLowerCase());
+                if (!map.has(key)) {
+                    map.set(key, { id: pkg.id, title: pkg.title, org, category, year: year >= 2014 ? year : 2014,
+                        pageUrl: CKAN_BASE + '/dataset/' + pkg.name, recursosDisponibles: recs, recursoSeleccionadoPorDefecto: recs[0] });
+                } else {
+                    const ex = map.get(key);
+                    const ids = new Set(ex.recursosDisponibles.map(r => r.id));
+                    recs.forEach(r => { if (!ids.has(r.id)) { ex.recursosDisponibles.push(r); ids.add(r.id); } });
+                    ex.recursosDisponibles.sort((a,b) => b.score - a.score);
+                    ex.recursoSeleccionadoPorDefecto = ex.recursosDisponibles[0];
+                }
+            });
+            return Array.from(map.values());
+        }
+
+        async function init() {
+            const note = document.getElementById('data-source-note');
+            try {
+                // 1) Catálogo pre-generado por GitHub Actions (ideal en Pages, sin CORS)
+                try {
+                    const r = await fetch('./datasets.json', { cache: 'no-cache' });
+                    if (r.ok) {
+                        const j = await r.json();
+                        if (Array.isArray(j) && j.length) {
+                            allDatasets = j;
+                            note.textContent = 'Catálogo offline generado automáticamente (' + j.length + ' datasets). Se actualiza a diario.';
+                            populateFilters(); renderDatasets(allDatasets);
+                            return;
+                        }
+                    }
+                } catch(e){}
+                // 2) En vivo contra CKAN (directo + proxies)
+                const data = await fetchJsonSmart(CATALOG_URL);
+                if (!data.success) throw new Error('API error');
+                allDatasets = mapPackagesToDatasets(data.result.results);
+                note.textContent = 'Catálogo en vivo desde datosabiertos.regiondemurcia.es';
+                populateFilters(); renderDatasets(allDatasets);
+            } catch (err) {
+                console.error(err);
+                document.getElementById('datasets-container').innerHTML =
+                    '<div class="p-4 text-center text-red-500 text-sm">No se pudo cargar el catálogo (CORS/red).<br>Si estás en local, ejecuta <code>npm start</code>. En Pages, espera a que la Action genere <code>datasets.json</code>.</div>';
+            }
+            updateOnlineBar();
+        }
+
+        function populateFilters() {
+            const cats = new Set(), themes = new Set(), years = new Set();
+            allDatasets.forEach(d => { if(d.org) cats.add(d.org); if(d.category) themes.add(d.category); if(d.year) years.add(d.year); });
+            const cs = document.getElementById('filter-category');
+            Array.from(cats).sort().forEach(c => { cs.innerHTML += '<option value="' + c.replace(/"/g,'&quot;') + '">' + c + '</option>'; });
+            const ts = document.getElementById('filter-theme');
+            Array.from(themes).sort().forEach(t => { ts.innerHTML += '<option value="' + t.replace(/"/g,'&quot;') + '">' + t + '</option>'; });
+            const ys = document.getElementById('filter-year');
+            Array.from(years).sort((a,b)=>b-a).forEach(y => { ys.innerHTML += '<option value="' + y + '">' + y + '</option>'; });
+        }
+
+        function filterDatasets() {
+            const search = document.getElementById('filter-search').value.toLowerCase();
+            const category = document.getElementById('filter-category').value;
+            const theme = document.getElementById('filter-theme').value;
+            const type = document.getElementById('filter-type').value;
+            const year = document.getElementById('filter-year').value;
+            const filtered = allDatasets.filter(d => {
+                const ms = d.title.toLowerCase().includes(search) || d.org.toLowerCase().includes(search);
+                const mc = category === 'ALL' || d.org === category;
+                const mt = theme === 'ALL' || d.category === theme;
+                const my = year === 'ALL' || String(d.year) === year;
+                let mty = true;
+                if (type === 'TABLAS') mty = d.recursosDisponibles.some(r => r.type === 'A' || r.type === 'B');
+                else if (type === 'MAPAS') mty = d.recursosDisponibles.some(r => r.type === 'C');
+                return ms && mc && mt && my && mty;
+            });
+            renderDatasets(filtered);
+        }
+
+        function renderDatasets(datasets) {
+            const container = document.getElementById('datasets-container');
+            document.getElementById('dataset-counter').textContent = datasets.length;
+            document.getElementById('list-count').textContent = datasets.length;
+            if (!datasets.length) {
+                container.innerHTML = '<div class="p-8 text-center text-gray-400 text-sm">No se encontraron datasets con los filtros seleccionados.</div>';
+                return;
+            }
+            container.innerHTML = '';
+            datasets.forEach(d => {
+                const card = document.createElement('div');
+                card.className = "p-4 bg-white rounded-lg border border-gray-200 hover:border-[#8A252C] transition shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4";
+                const safeTitle = (d.title || '').replace(/</g,'&lt;');
+                card.innerHTML =
+                    '<div class="flex-grow"><div class="flex items-center space-x-2 mb-1">' +
+                    '<span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 bg-gray-100 text-gray-600 rounded">' + d.org + '</span>' +
+                    '<span class="text-xs font-semibold text-gray-400">' + d.year + '</span></div>' +
+                    '<h4 class="text-sm font-semibold text-gray-900">' + safeTitle + '</h4></div>' +
+                    '<div class="flex items-center space-x-3 shrink-0 w-full sm:w-auto justify-between sm:justify-end border-t sm:border-t-0 pt-2 sm:pt-0 border-gray-100">' +
+                    '<span class="text-xs text-gray-500"><i class="fa-solid fa-file-lines mr-1"></i>' + d.recursosDisponibles.length + ' formato(s)</span>' +
+                    '<button data-id="' + d.id + '" class="btn-explore bg-[#8A252C] hover:bg-[#6E1C22] text-white text-xs px-3 py-1.5 rounded font-medium transition">Explorar</button></div>';
+                container.appendChild(card);
+            });
+            container.querySelectorAll('.btn-explore').forEach(b => b.addEventListener('click', () => exploreDataset(b.dataset.id)));
+        }
+
+        function exploreDataset(datasetId) {
+            const dataset = allDatasets.find(d => d.id === datasetId);
+            if (!dataset) return;
+            currentActiveDataset = dataset;
+            const viewerSection = document.getElementById('viewer-section');
+            const viewerTitle = document.getElementById('viewer-title');
+            const box = document.getElementById('format-buttons-container');
+            const btnXls = document.getElementById('btn-download-excel');
+            viewerSection.classList.remove('hidden');
+            viewerTitle.textContent = 'Dataset: ' + dataset.title;
+            btnXls.classList.add('hidden'); btnXls.classList.remove('flex');
+            viewerSection.scrollIntoView({ behavior: 'smooth' });
+            box.innerHTML = '';
+            dataset.recursosDisponibles.forEach((resource, idx) => {
+                const btn = document.createElement('button');
+                btn.className = 'text-xs px-3 py-1.5 rounded-lg font-medium transition border flex items-center space-x-1 ' + (idx === 0 ? 'bg-[#8A252C] text-white border-[#8A252C]' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100');
+                btn.innerHTML = '<i class="fa-solid fa-file-lines"></i><span>' + resource.name + ' [' + resource.format + ']</span>';
+                btn.onclick = () => {
+                    box.querySelectorAll('button').forEach(b => { b.className = 'text-xs px-3 py-1.5 rounded-lg font-medium transition border flex items-center space-x-1 bg-white text-gray-700 border-gray-300 hover:bg-gray-100'; });
+                    btn.className = 'text-xs px-3 py-1.5 rounded-lg font-medium transition border flex items-center space-x-1 bg-[#8A252C] text-white border-[#8A252C]';
+                    loadResourceContent(resource);
+                };
+                box.appendChild(btn);
+            });
+            if (dataset.recursosDisponibles.length) loadResourceContent(dataset.recursosDisponibles[0]);
+        }
+
+        function closeViewer() {
+            document.getElementById('viewer-section').classList.add('hidden');
+            if (mapInstance) { mapInstance.remove(); mapInstance = null; }
+        }
+
+        // ============ CONTENIDO DE RECURSO 100% FRONTEND (réplica de server.js) ============
+        async function loadResourceContent(resource) {
+            currentActiveResource = resource;
+            const viewerBody = document.getElementById('viewer-body');
+            const btnXls = document.getElementById('btn-download-excel');
+            btnXls.classList.add('hidden'); btnXls.classList.remove('flex');
+            viewerBody.innerHTML = '<div class="flex items-center justify-center space-x-2 text-gray-500 py-12"><i class="fa-solid fa-spinner fa-spin text-lg"></i><span>Cargando datos o cartografía…</span></div>';
+            try {
+                const fmt = (resource.format || '').toUpperCase();
+                const urlLower = (resource.downloadUrl || '').toLowerCase();
+                if (!resource.downloadUrl) throw new Error('El recurso no dispone de URL de descarga.');
+
+                // WMS directo (sin descarga)
+                if (fmt === 'WMS' || urlLower.includes('wms')) {
+                    viewerBody.innerHTML = '<div class="p-8 text-center text-gray-500 text-sm">Servicio WMS disponible. <a href="' + resource.downloadUrl + '" target="_blank" rel="noopener" class="text-blue-600 underline font-semibold">Abrir enlace WMS</a></div>';
+                    return;
+                }
+
+                // DataStore CKAN (vía proxy si hace falta)
+                if (resource.type === 'A' || resource.datastoreActive) {
+                    try {
+                        const dsUrl = CKAN_BASE + '/api/3/action/datastore_search?resource_id=' + resource.id + '&limit=300';
+                        const data = await fetchJsonSmart(dsUrl);
+                        if (data.success && data.result && data.result.records) {
+                            const records = data.result.records;
+                            const rawFields = data.result.fields ? data.result.fields.map(f => f.id) : Object.keys(records[0]);
+                            const headers = rawFields.filter(f => f !== '_id');
+                            const rows = records.map(rec => { let o = {}; headers.forEach(h => { o[h] = (rec[h] !== null && rec[h] !== undefined) ? String(rec[h]) : ''; }); return o; });
+                            currentLoadedData = { headers, rows };
+                            renderTableViewer(headers, rows);
+                            btnXls.classList.remove('hidden'); btnXls.classList.add('flex');
+                            return;
+                        }
+                    } catch(e){ console.warn('DataStore falló, sigo con descarga directa', e); }
+                }
+
+                const buf = await fetchBufferSmart(resource.downloadUrl);
+                const bytes = new Uint8Array(buf);
+                const textData = new TextDecoder('utf-8').decode(buf);
+                const cleanText = textData.trim();
+
+                // 1. KML / XML directo
+                if (fmt === 'KML' || fmt === 'XML' || urlLower.endsWith('.kml') || urlLower.endsWith('.xml') || cleanText.includes('<kml') || cleanText.startsWith('<?xml')) {
+                    renderMapViewer();
+                    const dom = new DOMParser().parseFromString(textData, 'text/xml');
+                    const gj = toGeoJSON.kml(dom);
+                    if (gj && gj.features && gj.features.length) addGeoJsonToMap(gj);
+                    else viewerBody.innerHTML = '<div class="p-8 text-center text-gray-600 text-sm">El KML no contiene geometrías válidas. <a href="' + resource.downloadUrl + '" target="_blank" rel="noopener" class="text-blue-600 underline font-semibold">Descargar archivo</a></div>';
+                    return;
+                }
+
+                // 2. KMZ (ZIP con KML dentro) — con JSZip
+                if (urlLower.endsWith('.kmz') || fmt === 'KMZ') {
+                    try {
+                        const zip = await JSZip.loadAsync(buf);
+                        for (const name of Object.keys(zip.files)) {
+                            if (name.toLowerCase().endsWith('.kml') || name.toLowerCase().endsWith('.xml')) {
+                                const xmlText = await zip.files[name].async('text');
+                                renderMapViewer();
+                                const dom = new DOMParser().parseFromString(xmlText, 'text/xml');
+                                addGeoJsonToMap(toGeoJSON.kml(dom));
+                                return;
+                            }
+                        }
+                    } catch(e){ console.warn('KMZ error', e); }
+                }
+
+                // 3. SHP en ZIP — con shpjs (lee .shp+.dbf en navegador)
+                if (urlLower.endsWith('.zip') || fmt === 'SHP' || fmt === 'ZIP') {
+                    try {
+                        if (typeof shp !== 'undefined') {
+                            const gj = await shp(buf);
+                            const fc = gj && gj.features ? gj : (Array.isArray(gj) ? gj[0] : null);
+                            // shpjs puede devolver array si hay varias capas
+                            const list = Array.isArray(gj) ? gj : [gj];
+                            for (const one of list) {
+                                if (one && one.features && one.features.length) {
+                                    renderMapViewer();
+                                    addGeoJsonToMap(fixGeojsonProjection(one, null));
+                                    return;
+                                }
+                            }
+                            if (fc && fc.features) { renderMapViewer(); addGeoJsonToMap(fixGeojsonProjection(fc, null)); return; }
+                        }
+                    } catch(e){ console.warn('SHP error', e); }
+                    // Si no es SHP válido, sigue a intentar como tabla
+                }
+
+                // 4. Excel — con SheetJS en navegador
+                if (fmt.includes('XLS') || urlLower.endsWith('.xls') || urlLower.endsWith('.xlsx')) {
+                    const wb = XLSX.read(bytes, { type: 'array' });
+                    const ws = wb.Sheets[wb.SheetNames[0]];
+                    const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+                    if (json.length) {
+                        const headers = Object.keys(json[0]);
+                        const rows = json.map(it => { let o = {}; headers.forEach(h => { o[h] = it[h] !== undefined ? String(it[h]) : ''; }); return o; });
+                        currentLoadedData = { headers, rows };
+                        renderTableViewer(headers, rows);
+                        btnXls.classList.remove('hidden'); btnXls.classList.add('flex');
+                        return;
+                    }
+                }
+
+                // 5. JSON / GeoJSON
+                if (cleanText.startsWith('[') || cleanText.startsWith('{')) {
+                    try {
+                        const j = JSON.parse(cleanText);
+                        // GeoJSON directo → mapa
+                        if (j.type === 'FeatureCollection' && j.features) { renderMapViewer(); addGeoJsonToMap(fixGeojsonProjection(j, null)); return; }
+                        const arr = Array.isArray(j) ? j : (j.result || j.data || j.rows || j.records || null);
+                        if (arr && Array.isArray(arr) && arr.length) {
+                            const flat = arr.map(item => { let o = {}; for (let p in item) { o[p] = (typeof item[p] !== 'object' || item[p] === null) ? String(item[p] ?? '') : JSON.stringify(item[p]); } return o; });
+                            const hs = new Set(); flat.forEach(r => Object.keys(r).forEach(h => hs.add(h)));
+                            const headers = Array.from(hs);
+                            const rows = flat.map(it => { let o = {}; headers.forEach(h => { o[h] = it[h] !== undefined ? String(it[h]) : ''; }); return o; });
+                            currentLoadedData = { headers, rows };
+                            renderTableViewer(headers, rows);
+                            btnXls.classList.remove('hidden'); btnXls.classList.add('flex');
+                            return;
+                        }
+                    } catch(e){ console.warn('JSON error', e); }
+                }
+
+                // 6. CSV
+                const lines = textData.split(/\r?\n/).filter(l => l.trim() !== '');
+                if (lines.length > 0 && (urlLower.endsWith('.csv') || fmt === 'CSV' || lines[0].includes(';') || lines[0].includes(','))) {
+                    const sep = lines[0].includes(';') ? ';' : ',';
+                    const headers = lines[0].split(sep).map(h => h.replace(/^["']|["']$/g, '').trim());
+                    if (headers.length > 1 || fmt === 'CSV') {
+                        let rows = [];
+                        for (let i = 1; i < Math.min(lines.length, 301); i++) {
+                            const cur = lines[i].split(sep); let o = {};
+                            headers.forEach((h, ix) => { o[h] = cur[ix] !== undefined ? cur[ix].replace(/^["']|["']$/g, '').trim() : ''; });
+                            rows.push(o);
+                        }
+                        currentLoadedData = { headers, rows };
+                        // Si tiene lat/lon y es tipo mapa, ofrece mapa igualmente (se pinta tabla)
+                        renderTableViewer(headers, rows);
+                        btnXls.classList.remove('hidden'); btnXls.classList.add('flex');
+                        return;
+                    }
+                }
+
+                viewerBody.innerHTML = '<div class="text-gray-500 text-sm p-8 text-center">No se pudo procesar este recurso en el navegador.<br><a href="' + resource.downloadUrl + '" target="_blank" rel="noopener" class="text-blue-600 underline font-semibold">Descargar archivo original</a></div>';
+                currentLoadedData = null;
+            } catch (err) {
+                console.error(err);
+                viewerBody.innerHTML = '<div class="text-red-500 text-sm p-8 text-center">Error: ' + (err.message || 'conexión') + '<br><a href="' + (currentActiveResource && currentActiveResource.downloadUrl) + '" target="_blank" rel="noopener" class="text-blue-600 underline">Descargar archivo</a></div>';
+                currentLoadedData = null;
+            }
+        }
+
+        function renderTableViewer(headers, rows) {
+            const viewerBody = document.getElementById('viewer-body');
+            if (!rows.length) { viewerBody.innerHTML = '<div class="text-gray-400 text-sm p-8 text-center">El recurso no contiene registros.</div>'; return; }
+            let html = '<div class="w-full overflow-auto max-h-[500px] border border-gray-200 rounded-lg"><table class="w-full text-left border-collapse text-xs bg-white"><thead class="bg-gray-100 sticky top-0 border-b border-gray-200"><tr>';
+            headers.forEach(h => { html += '<th class="p-2.5 font-semibold text-gray-700 uppercase">' + (h || '').toString().replace(/</g,'&lt;') + '</th>'; });
+            html += '</tr></thead><tbody class="divide-y divide-gray-100">';
+            rows.forEach(row => {
+                html += '<tr class="hover:bg-gray-50">';
+                headers.forEach(h => { html += '<td class="p-2.5 text-gray-600 truncate max-w-xs">' + ((row[h] !== undefined ? row[h] : '') + '').replace(/</g,'&lt;') + '</td>'; });
+                html += '</tr>';
+            });
+            viewerBody.innerHTML = html + '</tbody></table></div>';
+        }
+
+        function renderMapViewer() {
+            const viewerBody = document.getElementById('viewer-body');
+            viewerBody.innerHTML = '<div id="map"></div>';
+            if (mapInstance) { mapInstance.remove(); mapInstance = null; }
+            mapInstance = L.map('map').setView([37.9922, -1.1307], 10);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' }).addTo(mapInstance);
+        }
+
+        function addGeoJsonToMap(geojson) {
+            try {
+                const layer = L.geoJSON(geojson, {
+                    style: { color: '#8A252C', weight: 2, fillColor: '#8A252C', fillOpacity: 0.4 },
+                    onEachFeature: (feature, layer) => {
+                        if (feature.properties) {
+                            let p = '<div class="text-xs space-y-1">';
+                            for (let k in feature.properties) p += '<b>' + k + ':</b> ' + feature.properties[k] + '<br>';
+                            layer.bindPopup(p + '</div>');
+                        }
+                    }
+                }).addTo(mapInstance);
+                if (layer.getBounds().isValid()) mapInstance.fitBounds(layer.getBounds());
+            } catch (e) { console.error(e); }
+        }
+
+        document.getElementById('btn-download-excel').addEventListener('click', () => {
+            if (!currentLoadedData || !currentLoadedData.rows || !currentLoadedData.rows.length) { alert("No hay datos tabulares cargados."); return; }
+            try {
+                const ws = XLSX.utils.json_to_sheet(currentLoadedData.rows);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "DatosAbiertos");
+                const safe = currentActiveDataset ? currentActiveDataset.title.replace(/[^a-z0-9]/gi, '_').toLowerCase() : 'datos_murcia';
+                XLSX.writeFile(wb, safe + '.xlsx');
+            } catch (err) { alert("Error al generar Excel."); }
+        });
+
+        document.getElementById('filter-search').addEventListener('input', filterDatasets);
+        document.getElementById('filter-category').addEventListener('change', filterDatasets);
+        document.getElementById('filter-theme').addEventListener('change', filterDatasets);
+        document.getElementById('filter-type').addEventListener('change', filterDatasets);
+        document.getElementById('filter-year').addEventListener('change', filterDatasets);
+
+        function updateOnlineBar() {
+            document.getElementById('offline-bar').classList.toggle('hidden', navigator.onLine);
+        }
+        window.addEventListener('online', updateOnlineBar);
+        window.addEventListener('offline', updateOnlineBar);
+
+        // PWA: registro SW + botón instalar
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(()=>{}); });
+        }
+        let deferredPrompt = null;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault(); deferredPrompt = e;
+            document.getElementById('btn-install').classList.remove('hidden');
+        });
+        document.getElementById('btn-install').addEventListener('click', async () => {
+            if (deferredPrompt) { deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt = null;
+                document.getElementById('btn-install').classList.add('hidden'); }
+        });
+
+        window.onload = init;
+    </script>
+</body>
+</html>

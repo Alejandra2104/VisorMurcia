@@ -1,0 +1,28 @@
+{
+  "name": "visor-murcia",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build:catalog": "node scripts/build-catalog.mjs ./datasets.json",
+    "serve:static": "npx serve ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "adm-zip": "^0.6.0",
+    "cheerio": "^1.2.0",
+    "csv-parse": "^7.0.2",
+    "dbf-parser": "^0.0.1",
+    "express": "^5.2.1",
+    "fast-xml-parser": "^5.11.0",
+    "node-fetch": "^3.3.2",
+    "proj4": "^2.21.0",
+    "shapefile": "^0.6.6",
+    "shpjs": "^6.2.0",
+    "xlsx": "^0.18.5"
+  }
+}

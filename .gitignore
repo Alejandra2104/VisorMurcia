@@ -1,0 +1,17 @@
+# Dependencias
+node_modules/
+npm-debug.log*
+
+# Temporales del parser SHP
+temp_*.dbf
+temp_*.shp
+temp_*.shx
+
+# Sistema / editores
+.DS_Store
+Thumbs.db
+.vscode/
+*.log
+
+# Env
+.env
