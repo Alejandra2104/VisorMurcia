@@ -21,11 +21,14 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(express.static('public'));
+app.use(express.static(require('path').join(__dirname, 'public')));
 app.use(express.json());
 
 // Salud para Render/uptime
 app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+// Fallback: si el estático no resolvió (ej. serverless), sirve la app
+app.get('/', (req, res) => res.sendFile(require('path').join(__dirname, 'index.html')));
 
 // Definir proyecciones cartográficas para transformar coordenadas UTM a WGS84 (Lat/Lon)
 proj4.defs("EPSG:25830", "+proj=utm +zone=30 +ellps=GRS80 +units=m +no_defs");
