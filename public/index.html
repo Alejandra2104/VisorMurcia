@@ -23,6 +23,10 @@
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/shpjs@4.0.4/dist/shp.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+    <!-- Racimos de puntos para mapas con miles de chinchetas (rápido en móvil) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <style>
         .bg-murcia-red { background-color: #8A252C; }
         .hover\:bg-murcia-red-dark:hover { background-color: #6E1C22; }
@@ -442,7 +446,11 @@
         }
 
         // ============ CONTENIDO DE RECURSO 100% FRONTEND (réplica de server.js) ============
+        let loadingResource = false;
         async function loadResourceContent(resource) {
+            // Evita dobles pulsaciones mientras carga (cuelga el móvil)
+            if (loadingResource) return;
+            loadingResource = true;
             currentActiveResource = resource;
             const viewerBody = document.getElementById('viewer-body');
             const btnXls = document.getElementById('btn-download-excel');
@@ -654,6 +662,8 @@
                 console.error(err);
                 viewerBody.innerHTML = '<div class="text-red-500 text-sm p-8 text-center">Error: ' + (err.message || 'conexión') + '<br><a href="' + (currentActiveResource && currentActiveResource.downloadUrl) + '" target="_blank" rel="noopener" class="text-blue-600 underline">Descargar archivo</a></div>';
                 currentLoadedData = null;
+            } finally {
+                loadingResource = false;
             }
         }
 
@@ -679,22 +689,40 @@
             if (mapInstance) { mapInstance.remove(); mapInstance = null; }
             // preferCanvas: los mapas con miles de figuras van fluido en el móvil
             mapInstance = L.map('map', { preferCanvas: true }).setView([37.9922, -1.1307], 10);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' }).addTo(mapInstance);
+            // Dos fondos de calles: el directo de OSM se bloquea a veces con
+            // datos móviles (IP compartida), el de CARTO suele pasar siempre.
+            const baseCarto = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { maxZoom: 20, attribution: '© OpenStreetMap contributors © CARTO' });
+            const baseOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' });
+            baseCarto.addTo(mapInstance);
+            L.control.layers({ 'Calles': baseCarto, 'Calles (OSM)': baseOSM }, null, { position: 'topright' }).addTo(mapInstance);
         }
 
         function addGeoJsonToMap(geojson) {
             try {
-                const layer = L.geoJSON(geojson, {
-                    style: { color: '#8A252C', weight: 2, fillColor: '#8A252C', fillOpacity: 0.4 },
-                    onEachFeature: (feature, layer) => {
-                        if (feature.properties) {
-                            let p = '<div class="text-xs space-y-1">';
-                            for (let k in feature.properties) p += '<b>' + k + ':</b> ' + feature.properties[k] + '<br>';
-                            layer.bindPopup(p + '</div>');
-                        }
+                const feats = (geojson && geojson.features) || [];
+                const popup = (feature, layer) => {
+                    if (feature.properties) {
+                        let p = '<div class="text-xs space-y-1">';
+                        for (let k in feature.properties) p += '<b>' + k + ':</b> ' + feature.properties[k] + '<br>';
+                        layer.bindPopup(p + '</div>');
                     }
-                }).addTo(mapInstance);
-                if (layer.getBounds().isValid()) mapInstance.fitBounds(layer.getBounds());
+                };
+                const dot = (f, ll) => L.circleMarker(ll, { radius: 5, color: '#8A252C', weight: 1, fillColor: '#8A252C', fillOpacity: 0.7 });
+                let layer;
+                // Miles de puntos: racimos (rápido en móvil, se abren al acercar)
+                if (feats.length > 200 && feats.every(f => f.geometry && f.geometry.type === 'Point') && typeof L.markerClusterGroup !== 'undefined') {
+                    const cluster = L.markerClusterGroup({ showCoverageOnHover: false, maxClusterRadius: 60 });
+                    cluster.addLayer(L.geoJSON(geojson, { pointToLayer: dot, onEachFeature: popup }));
+                    layer = cluster;
+                } else {
+                    layer = L.geoJSON(geojson, {
+                        style: { color: '#8A252C', weight: 2, fillColor: '#8A252C', fillOpacity: 0.4 },
+                        pointToLayer: dot,
+                        onEachFeature: popup
+                    });
+                }
+                layer.addTo(mapInstance);
+                if (layer.getBounds && layer.getBounds().isValid()) mapInstance.fitBounds(layer.getBounds());
             } catch (e) { console.error(e); }
         }
 
