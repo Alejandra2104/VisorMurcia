@@ -179,6 +179,38 @@
             return geojson;
         }
 
+        // ============ BACKEND (para que Pages lea TODO igual que en local) ============
+        // Pages no puede correr Node, así que el parseo pesado (SHP, KMZ, XLS...)
+        // lo hace tu backend gratis (Render) con CORS abierto. Pon aquí su URL.
+        // Puedes cambiarla sin tocar código: ?api=https://tu-backend.onrender.com
+        const BACKEND_URL = new URLSearchParams(location.search).get('api')
+            || localStorage.getItem('visor_api')
+            || ''; // ej: 'https://visor-murcia.onrender.com'
+        async function apiPost(path, body) {
+            const tries = [path];
+            if (BACKEND_URL) tries.push(BACKEND_URL.replace(/\/$/, '') + path);
+            let lastErr;
+            for (const u of tries) {
+                try {
+                    const r = await fetch(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                    if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
+                    return await r.json();
+                } catch(e){ lastErr = e; }
+            }
+            throw lastErr;
+        }
+        async function apiGetDatasets() {
+            const tries = ['/api/datasets'];
+            if (BACKEND_URL) tries.push(BACKEND_URL.replace(/\/$/, '') + '/api/datasets');
+            for (const u of tries) {
+                try {
+                    const r = await fetch(u);
+                    if (r.ok) { const j = await r.json(); if (Array.isArray(j) && j.length) return { data: j, via: u }; }
+                } catch(e){}
+            }
+            return null;
+        }
+
         // ============ FETCH con fallback CORS (clave para Pages) ============
         // GitHub Pages es estático y la API CKAN no envía Access-Control-Allow-Origin.
         // Estrategia: 1) datasets.json generado por Actions (mismo origen, sin CORS),
@@ -266,6 +298,16 @@
         async function init() {
             const note = document.getElementById('data-source-note');
             try {
+                // 0) Backend Node (local o Render): parseo completo igual que en local
+                try {
+                    const via = await apiGetDatasets();
+                    if (via) {
+                        allDatasets = via.data;
+                        note.textContent = 'Conectado a la API CKAN vía backend (' + via.data.length + ' datasets).';
+                        populateFilters(); renderDatasets(allDatasets);
+                        updateOnlineBar(); return;
+                    }
+                } catch(e){}
                 // 1) Catálogo pre-generado por GitHub Actions (ideal en Pages, sin CORS)
                 try {
                     const r = await fetch('./datasets.json', { cache: 'no-cache' });
@@ -389,6 +431,33 @@
             btnXls.classList.add('hidden'); btnXls.classList.remove('flex');
             viewerBody.innerHTML = '<div class="flex items-center justify-center space-x-2 text-gray-500 py-12"><i class="fa-solid fa-spinner fa-spin text-lg"></i><span>Cargando datos o cartografía…</span></div>';
             try {
+                // 0) Backend Node primero (local o Render): transforma TODO igual que en local.
+                // Si responde, usamos su respuesta y no tocamos proxies del navegador.
+                try {
+                    const data = await apiPost('/api/fetch-dataset-content', {
+                        resourceId: resource.id, downloadUrl: resource.downloadUrl,
+                        format: resource.format, datastoreActive: resource.datastoreActive, type: resource.type
+                    });
+                    if (data && !data.error) {
+                        if (data.headers && data.rows) {
+                            currentLoadedData = data;
+                            renderTableViewer(data.headers, data.rows);
+                            btnXls.classList.remove('hidden'); btnXls.classList.add('flex');
+                            return;
+                        }
+                        if (data.isGeoJson && data.geojson) { renderMapViewer(); addGeoJsonToMap(data.geojson); return; }
+                        if (data.isMap && data.format === 'KML' && data.rawContent) {
+                            renderMapViewer();
+                            const dom = new DOMParser().parseFromString(data.rawContent, 'text/xml');
+                            addGeoJsonToMap(toGeoJSON.kml(dom));
+                            return;
+                        }
+                        if (data.isMap && data.mapUrl) {
+                            viewerBody.innerHTML = '<div class="p-8 text-center text-gray-500 text-sm">Servicio WMS disponible. <a href="' + data.mapUrl + '" target="_blank" rel="noopener" class="text-blue-600 underline font-semibold">Abrir enlace WMS</a></div>';
+                            return;
+                        }
+                    }
+                } catch(e){ console.warn('Backend no disponible, sigo en navegador', e); }
                 const fmt = (resource.format || '').toUpperCase();
                 const urlLower = (resource.downloadUrl || '').toLowerCase();
                 if (!resource.downloadUrl) throw new Error('El recurso no dispone de URL de descarga.');
