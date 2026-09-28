@@ -184,19 +184,33 @@
         // Estrategia: 1) datasets.json generado por Actions (mismo origen, sin CORS),
         // 2) directo, 3) proxies públicos.
         function proxyUrls(url) {
-            return [
-                url,
+            const list = [];
+            // Si la URL es http:// y estamos en https:// (Pages), el navegador la bloquea
+            // por contenido mixto: vamos directo a proxies https.
+            const isHttp = url.toLowerCase().startsWith('http://');
+            if (!isHttp) list.push(url);
+            list.push(
                 'https://corsproxy.io/?url=' + encodeURIComponent(url),
-                'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)
-            ];
+                'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+                'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url)
+            );
+            if (isHttp) list.push(url); // último intento directo por si el navegador lo permite
+            return list;
+        }
+        async function fetchOne(u, ms) {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), ms || 25000);
+            try {
+                const r = await fetch(u, { headers: { 'Accept': '*/*' }, signal: ctrl.signal, redirect: 'follow' });
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return await r.arrayBuffer();
+            } finally { clearTimeout(t); }
         }
         async function fetchBufferSmart(url) {
             let lastErr;
             for (const u of proxyUrls(url)) {
                 try {
-                    const r = await fetch(u, { headers: { 'Accept': '*/*' } });
-                    if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
-                    return await r.arrayBuffer();
+                    return await fetchOne(u);
                 } catch(e){ lastErr = e; }
             }
             throw lastErr || new Error('No se pudo descargar (CORS/red)');
