@@ -53,6 +53,14 @@ function roundCoords(coords) {
     return coords.map(roundCoords);
 }
 
+// Decodifica UTF-8 y, si sale roto (muchos CSV vienen en latin1),
+// lo intenta en latin1 antes de rendirse.
+function decodeText(buf) {
+    const u8 = buf.toString('utf8').replace(/^\uFEFF/, '');
+    if (!u8.includes('\uFFFD')) return u8;
+    return buf.toString('latin1').replace(/^\uFEFF/, '');
+}
+
 // Decodifica un buffer de texto detectando UTF-16 (algunos CSV vienen así)
 function decodeEntryText(buf) {
     const n = Math.min(buf.length, 1000);
@@ -62,20 +70,37 @@ function decodeEntryText(buf) {
     return buf.toString('utf8').replace(/^\uFEFF/, '');
 }
 
+// Parte una línea CSV respetando comillas ("a, b" no se parte)
+function splitCsvLine(line, sep) {
+    const out = [];
+    let cur = '';
+    let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (c === '"') {
+            if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+            else inQ = !inQ;
+        } else if (c === sep && !inQ) { out.push(cur); cur = ''; }
+        else cur += c;
+    }
+    out.push(cur);
+    return out;
+}
+
 // Helpers para reutilizar el parseo de tablas (también dentro de ZIPs)
 function parseCsvText(text) {
-    const lines = (text || '').split(/\r?\n/).filter(l => l.trim() !== '');
+    const lines = (text || '').replace(/\r\n?/g, '\n').split('\n').filter(l => l.trim() !== '');
     if (lines.length < 2) return null;
     const first = lines[0];
     if (!first.includes(';') && !first.includes(',')) return null;
     const separator = first.includes(';') ? ';' : ',';
-    const headers = first.split(separator).map(h => h.replace(/^["']|["']$/g, '').trim()).filter(h => h !== '');
+    const headers = splitCsvLine(first, separator).map(h => h.replace(/^["']|["']$/g, '').trim()).filter(h => h !== '');
     if (headers.length < 1) return null;
     // Si la primera línea parece binaria, no es CSV
     if (/[\uFFFD\u0000]/.test(first) || first.length > 20000) return null;
     let rows = [];
     for (let i = 1; i < Math.min(lines.length, 301); i++) {
-        const cur = lines[i].split(separator);
+        const cur = splitCsvLine(lines[i], separator);
         let o = {};
         headers.forEach((h, ix) => { o[h] = cur[ix] !== undefined ? cur[ix].replace(/^["']|["']$/g, '').trim() : ''; });
         rows.push(o);
@@ -360,7 +385,7 @@ app.post('/api/fetch-dataset-content', async (req, res) => {
             if (!fileRes.ok) throw new Error('HTTP ' + fileRes.status);
             const arrayBuffer = await fileRes.arrayBuffer();
             buffer = Buffer.from(arrayBuffer);
-            textData = buffer.toString('utf8');
+            textData = decodeText(buffer);
             cleanText = textData.trim();
         } catch (dlErr) {
             console.warn('Descarga directa falló, pruebo datastore:', downloadUrl, dlErr.message);
@@ -506,7 +531,17 @@ app.post('/api/fetch-dataset-content', async (req, res) => {
         if (buffer && (cleanText.startsWith('[') || cleanText.startsWith('{'))) {
             try {
                 const jsonData = JSON.parse(cleanText);
-                const jsonArray = Array.isArray(jsonData) ? jsonData : (jsonData.result || jsonData.data || jsonData.rows || jsonData.records || null);
+                // GeoJSON: es un mapa, no una tabla (antes caía en el CSV y
+                // salía una tabla basura en vez del mapa).
+                if (jsonData && jsonData.type === 'FeatureCollection' && Array.isArray(jsonData.features)) {
+                    jsonData.features.forEach(f => {
+                        if (f.geometry && f.geometry.coordinates) {
+                            f.geometry.coordinates = roundCoords(f.geometry.coordinates);
+                        }
+                    });
+                    return res.json({ isGeoJson: true, geojson: jsonData });
+                }
+                const jsonArray = Array.isArray(jsonData) ? jsonData : (jsonData.result || jsonData.data || jsonData.rows || jsonData.records || jsonData.value || null);
 
                 if (jsonArray && Array.isArray(jsonArray) && jsonArray.length > 0) {
                     
