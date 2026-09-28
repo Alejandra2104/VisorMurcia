@@ -185,7 +185,7 @@
         // Puedes cambiarla sin tocar código: ?api=https://tu-backend.onrender.com
         const BACKEND_URL = new URLSearchParams(location.search).get('api')
             || localStorage.getItem('visor_api')
-            || ''; // ej: 'https://visor-murcia.onrender.com'
+            || 'https://visor-murcia.vercel.app';
         async function apiPost(path, body) {
             const tries = [path];
             if (BACKEND_URL) tries.push(BACKEND_URL.replace(/\/$/, '') + path);
